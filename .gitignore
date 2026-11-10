@@ -1,0 +1,17 @@
+# Môi trường ảo Python
+venv/
+ENV/
+env/
+
+# Tệp tạm của Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Tệp bắt gói tin tạm
+*.pcap
+*.pcapng
+
+# Cấu hình IDE
+.vscode/
+.idea/

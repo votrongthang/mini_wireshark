@@ -1,0 +1,10 @@
+# Giao diện đồ họa
+PyQt5==5.15.10
+PyQt5-Qt5==5.15.2
+PyQt5-sip==12.13.0
+
+# Bắt và bóc tách gói tin mạng
+scapy==2.5.0
+
+# Tùy chọn: Thư viện vẽ biểu đồ phân tích lưu lượng mượt mà (dùng cho Tuần 3)
+pyqtgraph==0.13.7
