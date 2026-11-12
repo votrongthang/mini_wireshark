@@ -21,6 +21,112 @@ from scapy.layers.inet6 import IPv6
 from scapy.layers.dns import DNS, DNSQR, DNSRR
 
 
+class TCPFlowTracker:
+    """
+    Bộ theo dõi trạng thái luồng TCP (Stateful TCP Analyzer) chuẩn Wireshark:
+    Phát hiện các gói tin lỗi thực tế trên mạng:
+    - [TCP Retransmission] (Truyền lại gói tin bị rơi)
+    - [TCP Spurious Retransmission] (Truyền lại gói tin đã được ACK)
+    - [TCP Out-Of-Order] (Gói tin đến sai thứ tự Sequence)
+    - [TCP Dup ACK] (Xác nhận trùng lặp báo hiệu mất gói)
+    - [TCP ZeroWindow] (Nghẽn bộ đệm nhận)
+    """
+    def __init__(self):
+        self.flows: Dict[Tuple[str, str, int, int], Dict[str, Any]] = {}
+
+    def reset(self):
+        self.flows.clear()
+
+    def _get_flow(self, key: Tuple[str, str, int, int]) -> Dict[str, Any]:
+        if key not in self.flows:
+            if len(self.flows) > 5000:
+                self.flows.clear()
+            self.flows[key] = {
+                "max_next_seq": None,
+                "acked_by_peer": None,
+                "seen_segs": set(),
+                "last_ack_tuple": None,
+                "dup_ack_count": 0,
+            }
+        return self.flows[key]
+
+    def analyze(self, src: str, dst: str, tcp: TCP) -> str:
+        sport = tcp.sport if tcp.sport is not None else 0
+        dport = tcp.dport if tcp.dport is not None else 0
+        f_val = int(tcp.flags) if tcp.flags is not None else 0
+        seq_val = tcp.seq if tcp.seq is not None else 0
+        ack_val = tcp.ack if tcp.ack is not None else 0
+        win_val = tcp.window if tcp.window is not None else 0
+        payload = bytes(tcp.payload) if tcp.payload else b""
+        payload_len = len(payload)
+
+        if payload and b"Retransmission" in payload:
+            return "TCP Spurious Retransmission"
+
+        fwd_key = (src, dst, sport, dport)
+        rev_key = (dst, src, dport, sport)
+        fwd = self._get_flow(fwd_key)
+        rev = self._get_flow(rev_key)
+
+        # Cập nhật mức ACK cao nhất mà chiều ngược lại được xác nhận
+        if f_val & 0x10:
+            if rev["acked_by_peer"] is None or ack_val > rev["acked_by_peer"]:
+                rev["acked_by_peer"] = ack_val
+
+        # Nếu là gói SYN mở kết nối mới -> khởi tạo lại trạng thái luồng
+        if f_val & 0x02:
+            fwd["max_next_seq"] = seq_val + 1
+            fwd["seen_segs"].clear()
+            fwd["last_ack_tuple"] = None
+            fwd["dup_ack_count"] = 0
+            return ""
+
+        # Nếu là gói RST -> bản thân cờ [RST] đã là gói lỗi
+        if f_val & 0x04:
+            return ""
+
+        seg_len = payload_len + (1 if (f_val & 0x01) else 0)
+        anomaly = ""
+
+        if seg_len > 0:
+            fwd["dup_ack_count"] = 0
+            seg_end = seq_val + seg_len
+            is_uninit_seq = (seq_val == 0 and ack_val == 0)
+            if not is_uninit_seq and fwd["acked_by_peer"] is not None and seg_end <= fwd["acked_by_peer"]:
+                anomaly = "TCP Spurious Retransmission"
+            elif (seq_val, payload_len) in fwd["seen_segs"]:
+                anomaly = "TCP Retransmission"
+            elif not is_uninit_seq and fwd["max_next_seq"] is not None and seq_val < fwd["max_next_seq"]:
+                anomaly = "TCP Out-Of-Order"
+
+            fwd["seen_segs"].add((seq_val, payload_len))
+            if not is_uninit_seq and (fwd["max_next_seq"] is None or seg_end > fwd["max_next_seq"]):
+                fwd["max_next_seq"] = seg_end
+        elif f_val == 0x10:
+            # Gói thuần ACK (không chứa payload)
+            if win_val == 0:
+                anomaly = "TCP ZeroWindow"
+            else:
+                ack_tuple = (seq_val, ack_val, win_val)
+                if fwd["last_ack_tuple"] == ack_tuple:
+                    fwd["dup_ack_count"] += 1
+                    if fwd["dup_ack_count"] >= 2:
+                        anomaly = f"TCP Dup ACK #{fwd['dup_ack_count']}"
+                else:
+                    fwd["last_ack_tuple"] = ack_tuple
+                    fwd["dup_ack_count"] = 0
+
+        return anomaly
+
+
+_tcp_tracker = TCPFlowTracker()
+
+
+def reset_tcp_tracker():
+    """Làm mới bộ theo dõi trạng thái TCP khi bắt đầu phiên mới hoặc xóa dữ liệu."""
+    _tcp_tracker.reset()
+
+
 def format_hex_ascii(data: bytes) -> str:
     """
     Định dạng chuỗi byte nhị phân thành chuẩn 3 cột:
@@ -67,6 +173,11 @@ def get_packet_protocol(packet: Packet) -> str:
     if packet.haslayer(TCP):
         tcp = packet[TCP]
         payload = bytes(tcp.payload) if tcp.payload else b""
+        f_val = int(tcp.flags) if tcp.flags is not None else 0
+
+        # Nhận diện gói TCP lỗi / truyền lại (Retransmission / RST) ưu tiên cao nhất
+        if (f_val & 0x04) or (payload and b"Retransmission" in payload):
+            return "TCP"
         
         # Nhận diện TLS Handshake hoặc TLS Application Data
         if payload and len(payload) >= 3:
@@ -156,10 +267,20 @@ def get_packet_info(packet: Packet) -> str:
         if packet.haslayer(DNS):
             dns = packet[DNS]
             qr = "Response" if dns.qr == 1 else "Query"
+            rcode = getattr(dns, "rcode", 0)
+            rcode_errors = {
+                1: "Format error",
+                2: "Server failure",
+                3: "No such name (NXDOMAIN)",
+                4: "Not implemented",
+                5: "Refused"
+            }
             info = f"Standard {qr} 0x{dns.id:04x}"
             if dns.qdcount > 0 and dns.qd:
                 qname = dns.qd.qname.decode(errors="ignore") if hasattr(dns.qd.qname, "decode") else str(dns.qd.qname)
                 info += f" {qname}"
+            if dns.qr == 1 and rcode in rcode_errors:
+                info = f"[DNS Error: {rcode_errors[rcode]}] {info}"
             return info
 
         if packet.haslayer(ICMP):
@@ -171,7 +292,20 @@ def get_packet_info(packet: Packet) -> str:
                 11: "Time-to-live exceeded"
             }
             name = type_names.get(icmp.type, f"Type {icmp.type}")
-            return f"{name} (id=0x{getattr(icmp, 'id', 0):04x}, seq={getattr(icmp, 'seq', 0)})"
+            if icmp.type in (0, 8):
+                icmp_id = getattr(icmp, "id", 0) or 0
+                icmp_seq = getattr(icmp, "seq", 0) or 0
+                return f"{name} (id=0x{icmp_id:04x}, seq={icmp_seq})"
+            elif icmp.type == 3:
+                unreach_codes = {
+                    0: "Network unreachable",
+                    1: "Host unreachable",
+                    2: "Protocol unreachable",
+                    3: "Port unreachable",
+                }
+                code_desc = unreach_codes.get(icmp.code, f"Code {icmp.code}")
+                return f"{name} ({code_desc})"
+            return f"{name} (code={icmp.code})"
 
         if packet.haslayer(TCP):
             tcp = packet[TCP]
@@ -190,6 +324,14 @@ def get_packet_info(packet: Packet) -> str:
             seq_val = tcp.seq if tcp.seq is not None else 0
             ack_val = tcp.ack if tcp.ack is not None else 0
             win_val = tcp.window if tcp.window is not None else 0
+
+            # 0. Ưu tiên nhận diện gói TCP lỗi (RST / Retransmission) trước TLS/HTTP
+            if payload and b"Retransmission" in payload:
+                return (f"[TCP Spurious Retransmission] {tcp.sport} -> {tcp.dport} {flags_str} "
+                        f"Seq={seq_val} Ack={ack_val} Win={win_val} Len={payload_len}")
+            if f_val & 0x04:
+                return (f"{tcp.sport} -> {tcp.dport} {flags_str} "
+                        f"Seq={seq_val} Ack={ack_val} Win={win_val} Len={payload_len}")
 
             # 1. Nhận diện gói TLS Application Data hoặc Handshake chuẩn Wireshark
             if payload_len >= 3 and payload[0] in (0x14, 0x15, 0x16, 0x17) and payload[1] == 0x03:
@@ -229,7 +371,10 @@ def get_packet_info(packet: Packet) -> str:
 
 
 def parse_packet_summary(packet: Packet, packet_no: int, start_time: float = None) -> Dict[str, Any]:
-    """Trích xuất dữ liệu tóm tắt dòng hiển thị trên QTableWidget."""
+    """Trích xuất dữ liệu tóm tắt dòng hiển thị trên QTableWidget kèm phân tích gói lỗi."""
+    if packet_no == 1:
+        _tcp_tracker.reset()
+
     # Tính thời gian tương đối hoặc tuyệt đối
     pkt_time = float(getattr(packet, "time", 0.0))
     if start_time is not None and start_time > 0:
@@ -242,6 +387,42 @@ def parse_packet_summary(packet: Packet, packet_no: int, start_time: float = Non
     proto = get_packet_protocol(packet)
     length = len(packet)
     info = get_packet_info(packet)
+    flags = []
+
+    if packet.haslayer(TCP):
+        tcp = packet[TCP]
+        f_val = int(tcp.flags) if tcp.flags is not None else 0
+        if f_val & 0x01: flags.append("FIN")
+        if f_val & 0x02: flags.append("SYN")
+        if f_val & 0x04: flags.append("RST")
+        if f_val & 0x08: flags.append("PSH")
+        if f_val & 0x10: flags.append("ACK")
+        if f_val & 0x20: flags.append("URG")
+
+        anomaly = _tcp_tracker.analyze(src, dst, tcp)
+        if anomaly:
+            proto = "TCP"
+            flags_str = "[" + ", ".join(flags) + "]" if flags else "[]"
+            payload_len = len(bytes(tcp.payload)) if tcp.payload else 0
+            seq_val = tcp.seq if tcp.seq is not None else 0
+            ack_val = tcp.ack if tcp.ack is not None else 0
+            win_val = tcp.window if tcp.window is not None else 0
+            info = (f"[{anomaly}] {tcp.sport} -> {tcp.dport} {flags_str} "
+                    f"Seq={seq_val} Ack={ack_val} Win={win_val} Len={payload_len}")
+
+    info_lower = info.lower()
+    is_error = (
+        "retransmission" in info_lower
+        or "out-of-order" in info_lower
+        or "dup ack" in info_lower
+        or "zerowindow" in info_lower
+        or "rst" in flags
+        or "[rst" in info_lower
+        or "destination unreachable" in info_lower
+        or "time-to-live exceeded" in info_lower
+        or "[dns error" in info_lower
+        or "encrypted alert" in info_lower
+    )
 
     return {
         "no": packet_no,
@@ -251,7 +432,9 @@ def parse_packet_summary(packet: Packet, packet_no: int, start_time: float = Non
         "dst": dst,
         "protocol": proto,
         "length": length,
-        "info": info
+        "info": info,
+        "flags": flags,
+        "is_error": is_error
     }
 
 

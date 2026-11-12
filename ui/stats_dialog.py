@@ -8,8 +8,9 @@ from PyQt5.QtWidgets import (
     QTableWidgetItem, QHeaderView, QPushButton
 )
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont, QColor
+from PyQt5.QtGui import QFont, QColor, QBrush
 from ui.theme_manager import get_packet_color
+from ui.packet_table import WiresharkItemDelegate
 
 try:
     import pyqtgraph as pg
@@ -48,9 +49,11 @@ class StatsDialog(QDialog):
         # Bảng dữ liệu thống kê
         table = QTableWidget()
         table.setColumnCount(4)
-        table.setHorizontalHeaderLabels(["Giao thức", "Số gói tin", "Tỷ lệ (%)", "Màu sắc"])
+        table.setHorizontalHeaderLabels(["Giao thức", "Số gói tin", "Tỷ lệ (%)", "Màu chuẩn Wireshark"])
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setItemDelegate(WiresharkItemDelegate(table))
         table.setRowCount(len(proto_counter))
 
         sorted_protos = proto_counter.most_common()
@@ -67,10 +70,13 @@ class StatsDialog(QDialog):
             table.setItem(idx, 1, item_count)
             table.setItem(idx, 2, item_pct)
             
-            # Ô hiển thị thanh màu minh họa
-            item_color = QTableWidgetItem("■■■■")
+            # Ô hiển thị màu sắc chuẩn Wireshark của giao thức
+            bg_hex, fg_hex = get_packet_color(proto, "")
+            item_color = QTableWidgetItem(f" {proto} ({bg_hex}) ")
             item_color.setTextAlignment(Qt.AlignCenter)
-            item_color.setForeground(QColor("#38bdf8"))
+            item_color.setBackground(QBrush(QColor(bg_hex)))
+            item_color.setForeground(QBrush(QColor(fg_hex)))
+            item_color.setFont(QFont("Segoe UI", 9, QFont.Bold))
             table.setItem(idx, 3, item_color)
 
         layout.addWidget(table)

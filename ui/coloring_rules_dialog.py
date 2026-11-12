@@ -8,6 +8,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QColor, QBrush
 
 from ui.theme_manager import get_packet_color
+from ui.packet_table import WiresharkItemDelegate
 
 
 class ColoringRulesDialog(QDialog):
@@ -39,6 +40,7 @@ class ColoringRulesDialog(QDialog):
         table.setColumnWidth(1, 180)
         table.verticalHeader().setVisible(False)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setItemDelegate(WiresharkItemDelegate(table))
 
         rules = [
             ("ARP", "ARP Request", "Giao thức phân giải địa chỉ IP sang MAC (#FAF0D7)"),

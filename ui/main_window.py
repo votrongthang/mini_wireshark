@@ -17,7 +17,7 @@ from typing import List, Dict, Any, Optional
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QToolBar, QComboBox, QLineEdit, QPushButton, QLabel, QCheckBox,
-    QFileDialog, QMessageBox, QStatusBar, QApplication, QAction, QMenuBar
+    QFileDialog, QMessageBox, QStatusBar, QApplication, QAction, QMenuBar, QMenu
 )
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont
@@ -25,7 +25,7 @@ from PyQt5.QtGui import QFont
 from scapy.packet import Packet
 
 from core.sniffer import CaptureWorker, get_available_interfaces
-from core.parser import parse_packet_summary, parse_packet_layers
+from core.parser import parse_packet_summary, parse_packet_layers, reset_tcp_tracker
 from core.pcap_manager import save_pcap, load_pcap
 from core.filter_engine import match_display_filter
 from ui.packet_table import PacketTable
@@ -60,6 +60,20 @@ class MainWindow(QMainWindow):
 
         self.start_timestamp: Optional[float] = None
         self.capture_worker: Optional[CaptureWorker] = None
+
+        # Danh sách các bộ lọc mẫu / đã lưu (Bookmarks)
+        self.saved_filters: List[str] = [
+            "error",
+            "tcp",
+            "udp",
+            "dns",
+            "arp",
+            "icmp",
+            "http",
+            "tls",
+            "port == 80 or port == 443",
+            "len > 100"
+        ]
 
         # Timer chu kỳ 100ms (10 lần/giây) để xả hàng đợi vào bảng theo lô (Batching)
         self.ui_update_timer = QTimer(self)
@@ -194,6 +208,7 @@ class MainWindow(QMainWindow):
         self.combo_nic = QComboBox()
         self.combo_nic.setMaximumWidth(220)
         self.combo_nic.setFixedHeight(22)
+        self.combo_nic.currentIndexChanged.connect(self.on_nic_changed)
         self.toolbar.addWidget(self.combo_nic)
 
         # Nút Làm mới (Icon reload phẳng)
@@ -301,10 +316,11 @@ class MainWindow(QMainWindow):
         filter_layout.setContentsMargins(3, 1, 3, 1)
         filter_layout.setSpacing(3)
 
-        btn_filter_icon = QPushButton("🔖")
-        btn_filter_icon.setFixedSize(22, 22)
-        btn_filter_icon.setToolTip("Biểu thức lọc hiển thị (Display Filter)")
-        filter_layout.addWidget(btn_filter_icon)
+        self.btn_filter_icon = QPushButton("🔖")
+        self.btn_filter_icon.setFixedSize(22, 22)
+        self.btn_filter_icon.setToolTip("Danh sách bộ lọc mẫu / đã lưu (Display Filter Bookmarks)")
+        self.btn_filter_icon.clicked.connect(self.show_filter_bookmarks_menu)
+        filter_layout.addWidget(self.btn_filter_icon)
 
         self.txt_filter = QLineEdit()
         self.txt_filter.setObjectName("txt_filter")
@@ -331,8 +347,8 @@ class MainWindow(QMainWindow):
         self.btn_add_filter = QPushButton("➕")
         self.btn_add_filter.setObjectName("btn_filter_add")
         self.btn_add_filter.setFixedSize(22, 22)
-        self.btn_add_filter.setToolTip("Thêm / Lưu biểu thức bộ lọc (+)")
-        self.btn_add_filter.clicked.connect(self.apply_filter)
+        self.btn_add_filter.setToolTip("Lưu biểu thức lọc hiện tại vào Bookmarks và áp dụng (+)")
+        self.btn_add_filter.clicked.connect(self.save_and_apply_filter)
         filter_layout.addWidget(self.btn_add_filter)
 
         main_layout.addWidget(filter_container)
@@ -406,14 +422,48 @@ class MainWindow(QMainWindow):
 
         if theme_name == "dark":
             self.setStyleSheet(DARK_QSS)
-            self.btn_theme_toggle.setText("☀️ Giao diện Sáng")
+            self.btn_theme_toggle.setText("☀️")
+            self.btn_theme_toggle.setToolTip("Chuyển sang Giao diện Sáng (Light Mode)")
         else:
             self.setStyleSheet(LIGHT_QSS)
-            self.btn_theme_toggle.setText("🌙 Giao diện Tối")
+            self.btn_theme_toggle.setText("🌙")
+            self.btn_theme_toggle.setToolTip("Chuyển sang Giao diện Tối (Dark Mode)")
 
         self.packet_table.set_theme(theme_name)
         self.protocol_tree.set_theme(theme_name)
         self.hex_view.set_theme(theme_name)
+        self.on_filter_text_changed(self.txt_filter.text())
+
+    def on_nic_changed(self, index: int):
+        """Cập nhật thanh trạng thái ngay khi người dùng chọn card mạng khác."""
+        nic_data = self.combo_nic.currentData()
+        if nic_data:
+            self.lbl_current_nic.setText(f"NIC: {nic_data}")
+
+    def show_filter_bookmarks_menu(self):
+        """Hiển thị menu danh sách các biểu thức lọc mẫu / đã lưu khi bấm nút 🔖."""
+        menu = QMenu(self)
+        for expr in self.saved_filters:
+            act = QAction(f"🔍 {expr}", self)
+            act.triggered.connect(lambda checked=False, e=expr: self.on_filter_requested_from_context(e))
+            menu.addAction(act)
+
+        if self.txt_filter.text().strip():
+            menu.addSeparator()
+            act_clear = QAction("✖ Xóa bộ lọc hiện tại", self)
+            act_clear.triggered.connect(self.clear_filter)
+            menu.addAction(act_clear)
+
+        pos = self.btn_filter_icon.mapToGlobal(self.btn_filter_icon.rect().bottomLeft())
+        menu.exec_(pos)
+
+    def save_and_apply_filter(self):
+        """Lưu biểu thức lọc hiện tại vào danh sách Bookmarks và áp dụng lọc."""
+        expr = self.txt_filter.text().strip()
+        if expr and expr not in self.saved_filters:
+            self.saved_filters.append(expr)
+            self.lbl_status.setText(f"● Đã lưu bộ lọc '{expr}' vào Bookmarks")
+        self.apply_filter()
 
     def load_interfaces(self):
         """Tải danh sách các card mạng vào ComboBox."""
@@ -555,9 +605,10 @@ class MainWindow(QMainWindow):
         if 0 <= table_row_idx < len(self.displayed_indices):
             raw_pkt_idx = self.displayed_indices[table_row_idx]
             packet = self.raw_packets[raw_pkt_idx]
+            pkt_no = self.packet_summaries[raw_pkt_idx].get("no", raw_pkt_idx + 1)
 
             # 1. Cập nhật cây chi tiết các tầng (Khung dưới bên trái)
-            layers = parse_packet_layers(packet, raw_pkt_idx + 1)
+            layers = parse_packet_layers(packet, pkt_no)
             self.protocol_tree.display_packet(layers)
 
             # 2. Cập nhật mã Hex & ASCII (Khung dưới bên phải)
@@ -639,6 +690,7 @@ class MainWindow(QMainWindow):
         self.packet_summaries.clear()
         self.displayed_indices.clear()
         self.start_timestamp = None
+        reset_tcp_tracker()
 
         self.packet_table.clear_all()
         self.protocol_tree.clear_tree()
@@ -691,6 +743,9 @@ class MainWindow(QMainWindow):
 
     def load_sample_capture(self, sample_filename: str):
         """Tải một file mẫu pcap từ thư mục assets/sample_captures/ phục vụ demo báo cáo."""
+        if self.capture_worker and self.capture_worker.isRunning():
+            self.stop_capture()
+
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         pcap_path = os.path.join(base_dir, "assets", "sample_captures", sample_filename)
         if not os.path.exists(pcap_path):
@@ -719,8 +774,6 @@ class MainWindow(QMainWindow):
             if self.packet_table.rowCount() > 0:
                 self.packet_table.selectRow(0)
         except Exception as e:
-            QMessageBox.critical(self, "Lỗi đọc file mẫu", f"Không thể tải mẫu demo:\n{str(e)}")
-            self.lbl_status.setText("● Lỗi nạp mẫu demo")
             QMessageBox.critical(self, "Lỗi đọc file mẫu", f"Không thể tải mẫu demo:\n{str(e)}")
             self.lbl_status.setText("● Lỗi nạp mẫu demo")
 
@@ -805,3 +858,12 @@ class MainWindow(QMainWindow):
             "Hỗ trợ phân tích đa tầng (Ethernet, ARP, IPv4/IPv6, ICMP, TCP, UDP, DNS) "
             "kèm bộ lọc cú pháp Wireshark và xuất mã Hex nhị phân."
         )
+
+    def closeEvent(self, event):
+        """Đảm bảo dừng toàn bộ QTimer và luồng bắt gói an toàn trước khi thoát."""
+        if self.ui_update_timer.isActive():
+            self.ui_update_timer.stop()
+        if self.capture_worker is not None and self.capture_worker.isRunning():
+            self.capture_worker.stop()
+            self.capture_worker.wait()
+        event.accept()

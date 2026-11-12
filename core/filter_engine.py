@@ -70,14 +70,26 @@ def evaluate_single_condition(condition_str: str, summary: Dict[str, Any]) -> bo
 
     # 4. Kiểm tra giao thức đơn: tcp, udp, icmp, dns, arp, tls, http
     known_protocols = {
-        "tcp": ["tcp", "http", "tls/https"],
-        "udp": ["udp", "dns", "dhcp", "ntp"],
-        "icmp": ["icmp"],
-        "dns": ["dns"],
+        "tcp": ["tcp", "http", "tls", "tlsv1.0", "tlsv1.1", "tlsv1.2", "tlsv1.3", "tls/https", "ssh", "ftp"],
+        "udp": ["udp", "dns", "mdns", "llmnr", "ssdp", "dhcp", "ntp", "quic"],
+        "icmp": ["icmp", "icmpv6"],
+        "icmpv6": ["icmpv6"],
+        "dns": ["dns", "mdns", "llmnr"],
+        "mdns": ["mdns"],
+        "llmnr": ["llmnr"],
         "arp": ["arp"],
         "http": ["http"],
-        "tls": ["tls/https"],
-        "https": ["tls/https"],
+        "tls": ["tls", "tlsv1.0", "tlsv1.1", "tlsv1.2", "tlsv1.3", "tls/https"],
+        "tlsv1.2": ["tlsv1.2"],
+        "tlsv1.3": ["tlsv1.3"],
+        "ssl": ["tls", "tlsv1.0", "tlsv1.1", "tlsv1.2", "tlsv1.3", "tls/https"],
+        "https": ["tls", "tlsv1.0", "tlsv1.1", "tlsv1.2", "tlsv1.3", "tls/https"],
+        "quic": ["quic"],
+        "dhcp": ["dhcp"],
+        "ntp": ["ntp"],
+        "ssh": ["ssh"],
+        "igmp": ["igmp"],
+        "ospf": ["ospf"],
         "ipv4": ["ipv4"],
         "ipv6": ["ipv6"],
         "ethernet": ["ethernet"]
@@ -85,6 +97,17 @@ def evaluate_single_condition(condition_str: str, summary: Dict[str, Any]) -> bo
 
     cond_lower = cond.lower()
     proto = str(summary.get("protocol", "")).lower()
+    info = str(summary.get("info", "")).lower()
+
+    # Hỗ trợ lọc nhanh các gói tin bị lỗi mạng bằng từ khóa: error, errors, bad, loi
+    if cond_lower in ("error", "errors", "bad", "loi", "tcp.analysis.flags"):
+        if summary.get("is_error"):
+            return True
+        return any(k in info for k in (
+            "retransmission", "out-of-order", "dup ack", "zerowindow",
+            "[rst", "rst]", "rst,", "checksum error", "destination unreachable",
+            "time-to-live exceeded", "[dns error", "encrypted alert", "bad"
+        ))
 
     if cond_lower in known_protocols:
         return proto in known_protocols[cond_lower]

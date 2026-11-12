@@ -24,15 +24,24 @@ def get_packet_color(protocol: str, info: str = "", flags=None, theme: str = "li
         else:
             flags_list = [str(flags).upper()]
 
-    # 4. Sự cố & Lỗi TCP (Bad TCP: RST, Retransmission, Spurious Retransmission, Checksum Error)
-    is_bad_tcp = (
+    # 4. Sự cố & Lỗi mạng (Bad TCP / Network Errors: RST, Retransmission, Dup ACK, Out-Of-Order, ZeroWindow, ICMP Unreachable, DNS Error)
+    is_bad_packet = (
         "retransmission" in info_lower
+        or "out-of-order" in info_lower
+        or "dup ack" in info_lower
+        or "zerowindow" in info_lower
         or "[rst" in info_lower
+        or "rst]" in info_lower
+        or "rst," in info_lower
         or "rst" in flags_list
         or "checksum error" in info_lower
+        or "destination unreachable" in info_lower
+        or "time-to-live exceeded" in info_lower
+        or "[dns error" in info_lower
+        or "encrypted alert" in info_lower
         or "bad" in info_lower
     )
-    if is_bad_tcp:
+    if is_bad_packet:
         return ("#262626", "#FF5555")
 
     # 1. Giao thức mạng tầng thấp & Bắt tay TCP
@@ -197,6 +206,19 @@ QPushButton#btn_stop {
 QPushButton#btn_stop:hover {
     background-color: #fee2e2;
     border: 1px solid #fca5a5;
+}
+
+QDialog QPushButton {
+    background-color: #e2e8f0;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    padding: 4px 14px;
+    height: 24px;
+    font-size: 12px;
+}
+QDialog QPushButton:hover {
+    background-color: #cbd5e1;
+    border: 1px solid #94a3b8;
 }
 
 QComboBox {
@@ -429,6 +451,19 @@ QPushButton#btn_stop {
 QPushButton#btn_stop:hover {
     background-color: #7f1d1d;
     border: 1px solid #ef4444;
+}
+
+QDialog QPushButton {
+    background-color: #1e293b;
+    border: 1px solid #475569;
+    border-radius: 4px;
+    padding: 4px 14px;
+    height: 24px;
+    font-size: 12px;
+}
+QDialog QPushButton:hover {
+    background-color: #334155;
+    border: 1px solid #64748b;
 }
 
 QComboBox {
