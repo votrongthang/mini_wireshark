@@ -60,6 +60,7 @@ class MainWindow(QMainWindow):
 
         self.start_timestamp: Optional[float] = None
         self.capture_worker: Optional[CaptureWorker] = None
+        self.is_offline_data: bool = False
 
         # Danh sách các bộ lọc mẫu / đã lưu (Bookmarks)
         self.saved_filters: List[str] = [
@@ -353,6 +354,55 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(filter_container)
 
+        # Khung thanh chọn kịch bản Demo (Demo Bar cao 26px)
+        demo_container = QWidget()
+        demo_container.setObjectName("demo_bar_container")
+        demo_container.setFixedHeight(26)
+
+        demo_layout = QHBoxLayout(demo_container)
+        demo_layout.setContentsMargins(3, 1, 3, 1)
+        demo_layout.setSpacing(4)
+
+        lbl_demo = QLabel("🎬 Bản Demo:")
+        lbl_demo.setStyleSheet("font-size: 11px; font-weight: bold;")
+        demo_layout.addWidget(lbl_demo)
+
+        self.combo_demo = QComboBox()
+        self.combo_demo.setObjectName("combo_demo")
+        self.combo_demo.setFixedHeight(22)
+        self.combo_demo.setMinimumWidth(340)
+        self.combo_demo.addItem("-- Chọn kịch bản Demo để nạp nhanh --", None)
+        self.combo_demo.addItem("1. Giao thức ICMP (Ping Echo 4 gói Google)", "scenario1_icmp_ping.pcap")
+        self.combo_demo.addItem("2. Giao thức TCP (Bắt tay 3 bước + HTTP + FIN)", "scenario2_tcp_handshake.pcap")
+        self.combo_demo.addItem("3. Giao thức UDP & DNS (Phân giải tên miền A record)", "scenario3_dns_lookup.pcap")
+        self.combo_demo.addItem("4. Sự cố Bad TCP & Retransmission (Cờ RST, Nền đen chữ đỏ)", "scenario4_bad_tcp.pcap")
+        self.combo_demo.addItem("5. Phiên bắt gói tin tổng hợp 8 giao thức (demo.pcap)", "demo.pcap")
+        self.combo_demo.addItem("6. Mẫu chuẩn giao diện Wireshark thực tế (IPv6 UDP, TLS, Bad TCP)", "scenario5_wireshark_sample.pcap")
+        self.combo_demo.currentIndexChanged.connect(self.on_demo_combo_changed)
+        demo_layout.addWidget(self.combo_demo)
+
+        self.btn_load_demo = QPushButton("⚡ Nạp Demo")
+        self.btn_load_demo.setObjectName("btn_load_demo")
+        self.btn_load_demo.setFixedHeight(22)
+        self.btn_load_demo.setToolTip("Nạp kịch bản demo đã chọn từ danh sách")
+        self.btn_load_demo.clicked.connect(self.load_selected_demo)
+        demo_layout.addWidget(self.btn_load_demo)
+
+        self.btn_reload_demo = QPushButton("🔄 Tải lại")
+        self.btn_reload_demo.setObjectName("btn_reload_demo")
+        self.btn_reload_demo.setFixedHeight(22)
+        self.btn_reload_demo.setToolTip("Tải lại kịch bản demo hiện tại")
+        self.btn_reload_demo.clicked.connect(self.reload_current_demo)
+        demo_layout.addWidget(self.btn_reload_demo)
+
+        self.lbl_demo_badge = QLabel("")
+        self.lbl_demo_badge.setObjectName("lbl_demo_badge")
+        demo_layout.addWidget(self.lbl_demo_badge)
+
+        demo_layout.addStretch()
+
+        main_layout.addWidget(demo_container)
+
         # 3. BỐ CỤC CHUẨN 3 KHUNG (GIỐNG HỆT HÌNH ẢNH WIRESHARK)
         # Splitter chính theo chiều dọc (Tách Khung Trên và Khung Dưới)
         self.main_splitter = QSplitter(Qt.Vertical)
@@ -490,7 +540,13 @@ class MainWindow(QMainWindow):
         # 3. Đảm bảo an toàn: Nếu luồng cũ còn đang chạy thì dừng và chờ kết thúc hoàn toàn
         if self.capture_worker is not None and self.capture_worker.isRunning():
             self.capture_worker.stop()
-            self.capture_worker.wait()
+            if not self.capture_worker.wait(1500):
+                self.capture_worker.terminate()
+                self.capture_worker.wait(500)
+
+        # Nếu trước đó đang xem kịch bản Demo hoặc file PCAP ngoại tuyến, xóa dữ liệu cũ để bắt đầu phiên thật từ gói 1
+        if self.is_offline_data:
+            self.clear_capture_data()
 
         self.setWindowTitle(f"*{iface_id} — Mini Wireshark")
         self.lbl_status.setText(f"● Đang bắt gói tin trên [{iface_id}]...")
@@ -511,6 +567,8 @@ class MainWindow(QMainWindow):
         self.btn_stop.setEnabled(True)
         self.combo_nic.setEnabled(False)
         self.btn_refresh_nic.setEnabled(False)
+        if hasattr(self, "lbl_demo_badge"):
+            self.lbl_demo_badge.setText("● Bắt trực tiếp (Live)")
 
     def restart_capture(self):
         """Khởi động lại phiên bắt gói tin từ đầu (Restart)."""
@@ -539,7 +597,9 @@ class MainWindow(QMainWindow):
         if self.capture_worker and self.capture_worker.isRunning():
             self.lbl_status.setText("● Đang dừng luồng...")
             self.capture_worker.stop()
-            self.capture_worker.wait()
+            if not self.capture_worker.wait(1500):
+                self.capture_worker.terminate()
+                self.capture_worker.wait(500)
 
         self.setWindowTitle("Mini Wireshark — Bộ Phân Tích & Bắt Gói Tin Mạng Thời Gian Thực")
         self.btn_start.setEnabled(True)
@@ -690,6 +750,7 @@ class MainWindow(QMainWindow):
         self.packet_summaries.clear()
         self.displayed_indices.clear()
         self.start_timestamp = None
+        self.is_offline_data = False
         reset_tcp_tracker()
 
         self.packet_table.clear_all()
@@ -697,6 +758,12 @@ class MainWindow(QMainWindow):
         self.hex_view.clear_view()
         self._update_counts()
         self.lbl_status.setText("● Đã xóa dữ liệu")
+        if hasattr(self, "combo_demo"):
+            self.combo_demo.blockSignals(True)
+            self.combo_demo.setCurrentIndex(0)
+            self.combo_demo.blockSignals(False)
+        if hasattr(self, "lbl_demo_badge"):
+            self.lbl_demo_badge.setText("")
 
     def _update_counts(self):
         total = len(self.raw_packets)
@@ -733,8 +800,11 @@ class MainWindow(QMainWindow):
                 self.packet_summaries.append(summary)
 
             self.apply_filter()
+            self.is_offline_data = True
             self.setWindowTitle(f"{filename} — Mini Wireshark")
             self.lbl_status.setText(f"● Đã mở tệp: {filename} ({len(packets)} gói)")
+            if hasattr(self, "lbl_demo_badge"):
+                self.lbl_demo_badge.setText(f"📂 Tệp: {filename} ({len(packets)} gói)")
             if self.packet_table.rowCount() > 0:
                 self.packet_table.selectRow(0)
         except Exception as e:
@@ -768,14 +838,50 @@ class MainWindow(QMainWindow):
                 self.packet_summaries.append(summary)
 
             self.apply_filter()
+            self.is_offline_data = True
             self.setWindowTitle(f"{sample_filename} — Mini Wireshark")
             self.lbl_status.setText(f"● Đã tải mẫu demo: {sample_filename} ({len(packets)} gói)")
+
+            # Đồng bộ ComboBox Demo và Badge hiển thị
+            if hasattr(self, "combo_demo"):
+                for idx in range(self.combo_demo.count()):
+                    if self.combo_demo.itemData(idx) == sample_filename:
+                        self.combo_demo.blockSignals(True)
+                        self.combo_demo.setCurrentIndex(idx)
+                        self.combo_demo.blockSignals(False)
+                        break
+            if hasattr(self, "lbl_demo_badge"):
+                self.lbl_demo_badge.setText(f"✓ Đang chạy: {sample_filename} ({len(packets)} gói)")
 
             if self.packet_table.rowCount() > 0:
                 self.packet_table.selectRow(0)
         except Exception as e:
             QMessageBox.critical(self, "Lỗi đọc file mẫu", f"Không thể tải mẫu demo:\n{str(e)}")
             self.lbl_status.setText("● Lỗi nạp mẫu demo")
+
+    def on_demo_combo_changed(self, index: int):
+        """Tự động nạp mẫu khi người dùng chọn trong ComboBox Demo."""
+        sample_file = self.combo_demo.itemData(index)
+        if sample_file:
+            self.load_sample_capture(sample_file)
+        elif self.is_offline_data:
+            self.clear_capture_data()
+
+    def load_selected_demo(self):
+        """Bấm nút Nạp Demo từ thanh kịch bản."""
+        sample_file = self.combo_demo.currentData()
+        if sample_file:
+            self.load_sample_capture(sample_file)
+        else:
+            QMessageBox.information(self, "Thông báo", "Vui lòng chọn một kịch bản demo trong danh sách!")
+
+    def reload_current_demo(self):
+        """Bấm nút Tải lại kịch bản demo hiện tại."""
+        sample_file = self.combo_demo.currentData()
+        if sample_file:
+            self.load_sample_capture(sample_file)
+        else:
+            QMessageBox.information(self, "Thông báo", "Chưa có kịch bản demo nào được chọn để tải lại!")
 
     def save_pcap_file(self):
         """Lưu toàn bộ gói tin hiện tại ra tệp .pcap."""
@@ -865,5 +971,7 @@ class MainWindow(QMainWindow):
             self.ui_update_timer.stop()
         if self.capture_worker is not None and self.capture_worker.isRunning():
             self.capture_worker.stop()
-            self.capture_worker.wait()
+            if not self.capture_worker.wait(1500):
+                self.capture_worker.terminate()
+                self.capture_worker.wait(500)
         event.accept()

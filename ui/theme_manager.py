@@ -39,7 +39,8 @@ def get_packet_color(protocol: str, info: str = "", flags=None, theme: str = "li
         or "time-to-live exceeded" in info_lower
         or "[dns error" in info_lower
         or "encrypted alert" in info_lower
-        or "bad" in info_lower
+        or "[bad" in info_lower
+        or "bad tcp" in info_lower
     )
     if is_bad_packet:
         return ("#262626", "#FF5555")
@@ -252,6 +253,40 @@ QWidget#filter_bar_container {
     background-color: #f8fafc;
     border-bottom: 1px solid #cbd5e1;
     max-height: 26px;
+}
+
+/* Khung thanh chọn kịch bản Demo (Demo Bar) - Chuẩn Wireshark cao 26px */
+QWidget#demo_bar_container {
+    background-color: #f8fafc;
+    border-bottom: 1px solid #cbd5e1;
+    max-height: 26px;
+}
+
+QPushButton#btn_load_demo {
+    background-color: #eff6ff;
+    border: 1px solid #bfdbfe;
+    color: #1d4ed8;
+    font-weight: 600;
+    padding: 1px 8px;
+}
+QPushButton#btn_load_demo:hover {
+    background-color: #dbeafe;
+    border: 1px solid #93c5fd;
+}
+
+QPushButton#btn_reload_demo {
+    padding: 1px 8px;
+}
+QPushButton#btn_reload_demo:hover {
+    background-color: #e2e8f0;
+    border: 1px solid #cbd5e1;
+}
+
+QLabel#lbl_demo_badge {
+    font-size: 11px;
+    font-weight: 600;
+    color: #2563eb;
+    padding-left: 6px;
 }
 
 QLineEdit#txt_filter {
@@ -496,6 +531,40 @@ QWidget#filter_bar_container {
     background-color: #0f172a;
     border-bottom: 1px solid #334155;
     max-height: 26px;
+}
+
+/* Khung thanh chọn kịch bản Demo (Demo Bar) - Dark Mode */
+QWidget#demo_bar_container {
+    background-color: #0f172a;
+    border-bottom: 1px solid #334155;
+    max-height: 26px;
+}
+
+QPushButton#btn_load_demo {
+    background-color: #1e3a8a;
+    border: 1px solid #3b82f6;
+    color: #93c5fd;
+    font-weight: 600;
+    padding: 1px 8px;
+}
+QPushButton#btn_load_demo:hover {
+    background-color: #1d4ed8;
+    border: 1px solid #60a5fa;
+}
+
+QPushButton#btn_reload_demo {
+    padding: 1px 8px;
+}
+QPushButton#btn_reload_demo:hover {
+    background-color: #334155;
+    border: 1px solid #475569;
+}
+
+QLabel#lbl_demo_badge {
+    font-size: 11px;
+    font-weight: 600;
+    color: #60a5fa;
+    padding-left: 6px;
 }
 
 QLineEdit#txt_filter {

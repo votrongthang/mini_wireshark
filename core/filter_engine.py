@@ -106,7 +106,7 @@ def evaluate_single_condition(condition_str: str, summary: Dict[str, Any]) -> bo
         return any(k in info for k in (
             "retransmission", "out-of-order", "dup ack", "zerowindow",
             "[rst", "rst]", "rst,", "checksum error", "destination unreachable",
-            "time-to-live exceeded", "[dns error", "encrypted alert", "bad"
+            "time-to-live exceeded", "[dns error", "encrypted alert", "[bad", "bad tcp"
         ))
 
     if cond_lower in known_protocols:
